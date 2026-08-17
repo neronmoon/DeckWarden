@@ -1,0 +1,11 @@
+{
+  "name": "DeckWarden",
+  "author": "neronmoon",
+  "flags": ["debug"],
+  "api_version": 1,
+  "publish": {
+    "tags": ["utility", "password", "bitwarden"],
+    "description": "Bitwarden vault access in Game Mode via rbw.",
+    "image": "https://opengraph.githubassets.com/1/neronmoon/DeckWarden"
+  }
+}
