@@ -55,3 +55,6 @@ out/*
 cli/
 cli/*
 cli/decky
+
+# Bundled Bitwarden CLI (fetched by scripts/fetch-bw.sh)
+defaults/bin/bw

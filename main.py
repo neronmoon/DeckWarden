@@ -41,10 +41,17 @@ class Plugin:
             env.update(extra)
         return env
 
+    def _bundled_bw(self) -> str:
+        return os.path.join(decky.DECKY_PLUGIN_DIR, "bin", "bw")
+
     def _bw_path(self) -> str:
         configured = self.settings.getSetting("bw_path", "")
         if configured and os.path.isfile(configured) and os.access(configured, os.X_OK):
             return configured
+        bundled = self._bundled_bw()
+        if os.path.isfile(bundled):
+            os.chmod(bundled, 0o755)
+            return bundled
         home = self._home()
         for candidate in (
             os.path.join(home, ".local", "bin", "bw"),
@@ -57,7 +64,7 @@ class Plugin:
         found = shutil.which("bw")
         if found:
             return found
-        raise FileNotFoundError("bw not found — install Bitwarden CLI")
+        raise FileNotFoundError("bw not found — rebuild plugin to bundle CLI")
 
     async def _run(
         self,

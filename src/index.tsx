@@ -331,10 +331,7 @@ function Content() {
     return (
       <PanelSection title="Setup">
         <PanelSectionRow>
-          <div>{st.error || "Bitwarden CLI (bw) not found"}</div>
-        </PanelSectionRow>
-        <PanelSectionRow>
-          <div>Install bw into ~/.local/bin, then reopen.</div>
+          <div>{st.error || "Bundled bw missing — reinstall plugin build"}</div>
         </PanelSectionRow>
         <PanelSectionRow>
           <ButtonItem layout="below" onClick={refresh}>

@@ -7,32 +7,17 @@ Bitwarden vault access in Steam Deck Game Mode via the official Bitwarden CLI (`
 ## Requirements
 
 1. [Decky Loader](https://github.com/SteamDeckHomebrew/decky-loader)
-2. Official Bitwarden CLI (`bw`) on the Deck for the `deck` user
-3. This plugin sideloaded into Decky
+2. This plugin (ships the official Linux `bw` CLI inside the package)
 
-## Install Bitwarden CLI (Desktop Mode)
+No separate `bw` / `rbw` install on the Deck.
 
-Switch to Desktop Mode. As `deck`:
-
-```bash
-mkdir -p ~/.local/bin
-curl -L -o /tmp/bw.zip \
-  "https://vault.bitwarden.com/download/?app=cli&platform=linux"
-unzip -o /tmp/bw.zip -d /tmp/bw
-chmod +x /tmp/bw/bw
-mv /tmp/bw/bw ~/.local/bin/bw
-bw --version
-```
-
-Game Mode PATH is thin — keep the binary at `~/.local/bin/bw` (DeckWarden looks there first). Optional: set `bw_path` in plugin settings if installed elsewhere.
-
-Default server is Bitwarden Cloud. Self-hosted / Vaultwarden:
+Self-hosted / Vaultwarden (optional, Desktop once):
 
 ```bash
-bw config server https://your-vault.example.com
+~/homebrew/plugins/DeckWarden/bin/bw config server https://your-vault.example.com
 ```
 
-Accounts with interactive 2FA may need a one-time Desktop `bw login` first, or an API-key flow (not in this MVP).
+Accounts with interactive 2FA may fail in Game Mode (MVP is email + master password only).
 
 ## Install DeckWarden
 
@@ -40,16 +25,19 @@ Accounts with interactive 2FA may need a one-time Desktop `bw login` first, or a
 
 ```bash
 pnpm install
-pnpm run build
+pnpm run build   # also downloads Linux bw into defaults/bin/
 ```
+
+Or use the GitHub Actions **DeckWarden** artifact zip.
 
 ### Sideload
 
 1. Enable Decky Developer mode
-2. Copy the plugin to `~/homebrew/plugins/DeckWarden` with at least:
+2. Install the built zip / copy the plugin to `~/homebrew/plugins/DeckWarden` with at least:
 
    - `plugin.json`, `package.json`, `main.py`
    - `dist/index.js`
+   - `bin/bw` (executable — from `defaults/bin` after Decky install)
    - `py_modules/item_parse.py`
 
 3. Restart Decky / reload plugins
