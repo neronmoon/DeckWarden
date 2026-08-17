@@ -17,7 +17,7 @@ Self-hosted / Vaultwarden (optional, Desktop once):
 ~/homebrew/plugins/DeckWarden/bin/bw config server https://your-vault.example.com
 ```
 
-Accounts with interactive 2FA may fail in Game Mode (MVP is email + master password only).
+Accounts with 2FA: use **I have 2FA** (or enter email/password first — the plugin prompts if Bitwarden asks). Supported methods: Authenticator, Email code, YubiKey. Duo / FIDO2 WebAuthn are not supported by `bw` CLI.
 
 ## Install DeckWarden
 

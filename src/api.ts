@@ -15,10 +15,14 @@ export type Status = {
 export type OkResult = {
   ok: boolean;
   error?: string;
+  needs2fa?: boolean;
 };
 
 export const status = callable<[], Status>("status");
-export const login = callable<[email: string, password: string], OkResult>("login");
+export const login = callable<
+  [email: string, password: string, totp?: string, method?: number],
+  OkResult
+>("login");
 export const unlock = callable<[password: string], OkResult>("unlock");
 export const lock = callable<[], { ok: boolean }>("lock");
 export const logout = callable<[], { ok: boolean }>("logout");

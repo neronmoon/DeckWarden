@@ -44,6 +44,12 @@ function MasterPasswordField({
   );
 }
 
+const TOTP_METHODS: { id: number; label: string }[] = [
+  { id: 0, label: "Authenticator" },
+  { id: 1, label: "Email" },
+  { id: 3, label: "YubiKey" },
+];
+
 function LoginView({
   initialEmail,
   onUnlocked,
@@ -53,20 +59,47 @@ function LoginView({
 }) {
   const [email, setEmail] = useState(initialEmail);
   const [password, setPassword] = useState("");
+  const [totp, setTotp] = useState("");
+  const [method, setMethod] = useState(0);
+  const [needs2fa, setNeeds2fa] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+
+  useEffect(() => {
+    getSetting("totp_method", "0").then((v) => {
+      const n = Number(v);
+      if (n === 0 || n === 1 || n === 3) setMethod(n);
+    });
+  }, []);
 
   const onLogin = async () => {
     setBusy(true);
     setError("");
-    const result = await login(email.trim(), password);
-    setPassword("");
+    const result = await login(email.trim(), password, totp.trim(), method);
     setBusy(false);
     if (!result.ok) {
+      if (result.needs2fa) {
+        setNeeds2fa(true);
+        setError(result.error || "Enter 2FA code");
+        return;
+      }
+      setPassword("");
+      setTotp("");
       setError(result.error || "Login failed");
       return;
     }
+    setPassword("");
+    setTotp("");
     onUnlocked();
+  };
+
+  const methodLabel =
+    TOTP_METHODS.find((m) => m.id === method)?.label || "Authenticator";
+
+  const cycleMethod = () => {
+    const idx = TOTP_METHODS.findIndex((m) => m.id === method);
+    const next = TOTP_METHODS[(idx + 1) % TOTP_METHODS.length];
+    setMethod(next.id);
   };
 
   return (
@@ -81,10 +114,35 @@ function LoginView({
       <PanelSectionRow>
         <MasterPasswordField value={password} onChange={setPassword} />
       </PanelSectionRow>
+      {(needs2fa || totp) && (
+        <>
+          <PanelSectionRow>
+            <ButtonItem layout="below" onClick={cycleMethod}>
+              2FA: {methodLabel}
+            </ButtonItem>
+          </PanelSectionRow>
+          <PanelSectionRow>
+            <TextField
+              label="2FA code"
+              value={totp}
+              onChange={(e) => setTotp(e.target.value)}
+            />
+          </PanelSectionRow>
+        </>
+      )}
+      {!needs2fa && !totp ? (
+        <PanelSectionRow>
+          <ButtonItem layout="below" onClick={() => setNeeds2fa(true)}>
+            I have 2FA
+          </ButtonItem>
+        </PanelSectionRow>
+      ) : null}
       <PanelSectionRow>
         <ButtonItem
           layout="below"
-          disabled={busy || !email.trim() || !password}
+          disabled={
+            busy || !email.trim() || !password || (needs2fa && !totp.trim())
+          }
           onClick={onLogin}
         >
           {busy ? "Logging in…" : "Log in"}

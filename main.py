@@ -20,6 +20,25 @@ def _err_tail(stderr: str, stdout: str = "") -> str:
     return lines[-1][:200] if lines else "unknown error"
 
 
+def _needs_2fa(stderr: str, stdout: str = "") -> bool:
+    text = f"{stderr}\n{stdout}".lower()
+    return any(
+        s in text
+        for s in (
+            "two-step",
+            "two step",
+            "2fa",
+            "totp",
+            "verification code",
+            "second factor",
+            "two-factor",
+            "authenticator",
+            "yubikey",
+            "code is required",
+        )
+    )
+
+
 class Plugin:
     async def _main(self):
         self.settings = SettingsManager(
@@ -151,28 +170,47 @@ class Plugin:
             self._session = None
         return {"state": state, "email": email}
 
-    async def login(self, email: str, password: str) -> dict:
+    async def login(
+        self,
+        email: str,
+        password: str,
+        totp: str = "",
+        method: int = 0,
+    ) -> dict:
         try:
             bw = self._bw_path()
         except FileNotFoundError as e:
             return {"ok": False, "error": str(e)}
         email = email.strip()
+        totp = (totp or "").strip()
         if not email or not password:
             return {"ok": False, "error": "email and password required"}
+        if method not in (0, 1, 3):
+            method = 0
         self.settings.setSetting("email", email)
+        self.settings.setSetting("totp_method", str(method))
         self.settings.commit()
-        decky.logger.info("login start email=%s bw=%s", email, bw)
+        decky.logger.info(
+            "login start email=%s method=%s has_totp=%s bw=%s",
+            email,
+            method,
+            bool(totp),
+            bw,
+        )
         try:
+            args = [
+                bw,
+                "login",
+                email,
+                "--passwordenv",
+                "BW_PASSWORD",
+                "--raw",
+                "--nointeraction",
+            ]
+            if totp:
+                args.extend(["--method", str(method), "--code", totp])
             code, stdout, stderr = await self._run(
-                [
-                    bw,
-                    "login",
-                    email,
-                    "--passwordenv",
-                    "BW_PASSWORD",
-                    "--raw",
-                    "--nointeraction",
-                ],
+                args,
                 extra_env={"BW_PASSWORD": password},
                 timeout=LOGIN_TIMEOUT,
             )
@@ -181,7 +219,13 @@ class Plugin:
                 if "already logged in" in combined:
                     decky.logger.info("already logged in, unlocking")
                     return await self.unlock(password)
-                return {"ok": False, "error": _err_tail(stderr, stdout)}
+                err = _err_tail(stderr, stdout)
+                if _needs_2fa(stderr, stdout) or (
+                    not totp and "code" in combined
+                ):
+                    decky.logger.info("login needs 2fa")
+                    return {"ok": False, "error": err, "needs2fa": True}
+                return {"ok": False, "error": err}
             session = stdout.strip()
             if not session:
                 return {"ok": False, "error": "no session from login"}
@@ -301,7 +345,7 @@ class Plugin:
         return self.settings.getSetting(key, default)
 
     async def set_setting(self, key: str, value: str) -> None:
-        if key not in ("bw_path", "last_query", "email"):
+        if key not in ("bw_path", "last_query", "email", "totp_method"):
             return
         self.settings.setSetting(key, value)
         self.settings.commit()
