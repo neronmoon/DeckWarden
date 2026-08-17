@@ -8,6 +8,17 @@ import decky
 from settings import SettingsManager
 from item_parse import entries_from_items
 
+LOGIN_TIMEOUT = 120
+DEFAULT_TIMEOUT = 60
+
+
+def _err_tail(stderr: str, stdout: str = "") -> str:
+    text = (stderr or stdout or "").strip()
+    if not text:
+        return "unknown error"
+    lines = [ln for ln in text.splitlines() if ln.strip()]
+    return lines[-1][:200] if lines else "unknown error"
+
 
 class Plugin:
     async def _main(self):
@@ -17,6 +28,7 @@ class Plugin:
         )
         self.settings.read()
         self._session: str | None = None
+        decky.logger.info("DeckWarden loaded log=%s", decky.DECKY_PLUGIN_LOG)
 
     async def _unload(self):
         self._session = None
@@ -71,19 +83,45 @@ class Plugin:
         args: list[str],
         *,
         extra_env: dict[str, str] | None = None,
+        timeout: float = DEFAULT_TIMEOUT,
     ) -> tuple[int, str, str]:
+        label = " ".join(args[1:3] if len(args) > 1 else args)
+        decky.logger.info("bw run: %s", label)
         proc = await asyncio.create_subprocess_exec(
             *args,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            stdin=asyncio.subprocess.DEVNULL,
             env=self._env(extra_env),
         )
-        stdout_b, stderr_b = await proc.communicate()
-        return proc.returncode or 0, stdout_b.decode(), stderr_b.decode()
+        try:
+            stdout_b, stderr_b = await asyncio.wait_for(
+                proc.communicate(), timeout=timeout
+            )
+        except asyncio.TimeoutError:
+            proc.kill()
+            await proc.wait()
+            decky.logger.error("bw timeout after %ss: %s", timeout, label)
+            return 124, "", f"timeout after {int(timeout)}s"
+        code = proc.returncode or 0
+        stdout = stdout_b.decode(errors="replace")
+        stderr = stderr_b.decode(errors="replace")
+        if code != 0:
+            decky.logger.error(
+                "bw failed code=%s cmd=%s err=%s",
+                code,
+                label,
+                _err_tail(stderr, stdout),
+            )
+        else:
+            decky.logger.info("bw ok: %s", label)
+        return code, stdout, stderr
 
     async def _bw_status(self) -> dict:
         bw = self._bw_path()
-        code, stdout, _ = await self._run([bw, "status", "--raw"])
+        code, stdout, _ = await self._run(
+            [bw, "status", "--raw", "--nointeraction"], timeout=30
+        )
         if code != 0 or not stdout.strip():
             return {"status": "unauthenticated", "userEmail": ""}
         return json.loads(stdout)
@@ -123,22 +161,37 @@ class Plugin:
             return {"ok": False, "error": "email and password required"}
         self.settings.setSetting("email", email)
         self.settings.commit()
+        decky.logger.info("login start email=%s bw=%s", email, bw)
         try:
             code, stdout, stderr = await self._run(
-                [bw, "login", email, "--passwordenv", "BW_PASSWORD", "--raw"],
+                [
+                    bw,
+                    "login",
+                    email,
+                    "--passwordenv",
+                    "BW_PASSWORD",
+                    "--raw",
+                    "--nointeraction",
+                ],
                 extra_env={"BW_PASSWORD": password},
+                timeout=LOGIN_TIMEOUT,
             )
+            combined = (stderr + stdout).lower()
             if code != 0:
-                err = (stderr or stdout).strip().splitlines()
-                msg = err[-1] if err else "login failed"
-                if "already logged in" in (stderr + stdout).lower():
+                if "already logged in" in combined:
+                    decky.logger.info("already logged in, unlocking")
                     return await self.unlock(password)
-                return {"ok": False, "error": msg}
+                return {"ok": False, "error": _err_tail(stderr, stdout)}
             session = stdout.strip()
             if not session:
                 return {"ok": False, "error": "no session from login"}
             self._session = session
-            await self._run([bw, "sync"])
+            decky.logger.info("login ok, syncing")
+            sync_code, _, sync_err = await self._run(
+                [bw, "sync", "--nointeraction"], timeout=LOGIN_TIMEOUT
+            )
+            if sync_code != 0:
+                decky.logger.error("sync after login failed: %s", _err_tail(sync_err))
             return {"ok": True}
         finally:
             del password
@@ -150,6 +203,7 @@ class Plugin:
             return {"ok": False, "error": str(e)}
         if not password:
             return {"ok": False, "error": "password required"}
+        decky.logger.info("unlock start")
         try:
             raw = await self._bw_status()
             if raw.get("status") == "unauthenticated":
@@ -158,16 +212,24 @@ class Plugin:
                     return {"ok": False, "error": "login first"}
                 return await self.login(email, password)
             code, stdout, stderr = await self._run(
-                [bw, "unlock", "--passwordenv", "BW_PASSWORD", "--raw"],
+                [
+                    bw,
+                    "unlock",
+                    "--passwordenv",
+                    "BW_PASSWORD",
+                    "--raw",
+                    "--nointeraction",
+                ],
                 extra_env={"BW_PASSWORD": password},
+                timeout=LOGIN_TIMEOUT,
             )
             if code != 0:
-                err = (stderr or stdout).strip().splitlines()
-                return {"ok": False, "error": err[-1] if err else "unlock failed"}
+                return {"ok": False, "error": _err_tail(stderr, stdout)}
             session = stdout.strip()
             if not session:
                 return {"ok": False, "error": "no session from unlock"}
             self._session = session
+            decky.logger.info("unlock ok")
             return {"ok": True}
         finally:
             del password
@@ -176,7 +238,7 @@ class Plugin:
         self._session = None
         try:
             bw = self._bw_path()
-            await self._run([bw, "lock"])
+            await self._run([bw, "lock", "--nointeraction"], timeout=30)
         except FileNotFoundError:
             pass
         return {"ok": True}
@@ -185,7 +247,7 @@ class Plugin:
         self._session = None
         try:
             bw = self._bw_path()
-            await self._run([bw, "logout"])
+            await self._run([bw, "logout", "--nointeraction"], timeout=30)
         except FileNotFoundError:
             pass
         return {"ok": True}
@@ -194,14 +256,21 @@ class Plugin:
         if not self._session:
             return {"ok": False, "error": "locked"}
         bw = self._bw_path()
-        code, _, _ = await self._run([bw, "sync"])
-        return {"ok": code == 0, "error": "" if code == 0 else "sync failed"}
+        code, _, stderr = await self._run(
+            [bw, "sync", "--nointeraction"], timeout=LOGIN_TIMEOUT
+        )
+        return {
+            "ok": code == 0,
+            "error": "" if code == 0 else _err_tail(stderr),
+        }
 
     async def list_entries(self) -> list[dict[str, str]]:
         if not self._session:
             return []
         bw = self._bw_path()
-        code, stdout, _ = await self._run([bw, "list", "items"])
+        code, stdout, _ = await self._run(
+            [bw, "list", "items", "--nointeraction"], timeout=DEFAULT_TIMEOUT
+        )
         if code != 0 or not stdout.strip():
             return []
         return entries_from_items(json.loads(stdout))
@@ -210,7 +279,9 @@ class Plugin:
         if not self._session:
             return ""
         bw = self._bw_path()
-        code, stdout, _ = await self._run([bw, "get", "password", entry_id])
+        code, stdout, _ = await self._run(
+            [bw, "get", "password", entry_id, "--nointeraction"], timeout=30
+        )
         if code != 0:
             return ""
         return stdout.rstrip("\n")
@@ -219,7 +290,9 @@ class Plugin:
         if not self._session:
             return ""
         bw = self._bw_path()
-        code, stdout, _ = await self._run([bw, "get", "username", entry_id])
+        code, stdout, _ = await self._run(
+            [bw, "get", "username", entry_id, "--nointeraction"], timeout=30
+        )
         if code != 0:
             return ""
         return stdout.rstrip("\n")

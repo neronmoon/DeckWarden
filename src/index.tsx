@@ -26,6 +26,24 @@ import {
 } from "./api";
 import { typeText } from "./typeText";
 
+function MasterPasswordField({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <TextField
+      label="Master password"
+      bIsPassword
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      {...({ type: "password", autoComplete: "current-password" } as object)}
+    />
+  );
+}
+
 function LoginView({
   initialEmail,
   onUnlocked,
@@ -61,12 +79,7 @@ function LoginView({
         />
       </PanelSectionRow>
       <PanelSectionRow>
-        <TextField
-          label="Master password"
-          bIsPassword
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-        />
+        <MasterPasswordField value={password} onChange={setPassword} />
       </PanelSectionRow>
       <PanelSectionRow>
         <ButtonItem
@@ -120,12 +133,7 @@ function UnlockView({
         </PanelSectionRow>
       ) : null}
       <PanelSectionRow>
-        <TextField
-          label="Master password"
-          bIsPassword
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-        />
+        <MasterPasswordField value={password} onChange={setPassword} />
       </PanelSectionRow>
       <PanelSectionRow>
         <ButtonItem layout="below" disabled={busy || !password} onClick={onUnlock}>

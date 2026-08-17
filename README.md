@@ -62,6 +62,18 @@ Or use the GitHub Actions **DeckWarden** artifact zip.
 - Credentials fetched from `bw` only when typing or revealing
 - No auto-unlock
 
+## Logs
+
+On the Deck:
+
+```bash
+tail -f ~/homebrew/logs/DeckWarden/plugin.log
+```
+
+Password and session keys are never written there — only steps, exit codes, and short error tails.
+
+Login/unlock time out after 120s (often hung before on interactive 2FA prompts).
+
 ## Smoke check
 
 ```bash
