@@ -4,8 +4,8 @@
   "description": "Bitwarden Cloud vault in Steam Deck Game Mode via official bw CLI",
   "type": "module",
   "scripts": {
-    "fetch-bw": "bash scripts/fetch-bw.sh",
-    "build": "bash scripts/fetch-bw.sh && rollup -c",
+    "fetch-bw": "node scripts/fetch-bw.mjs",
+    "build": "node scripts/fetch-bw.mjs && rollup -c",
     "watch": "rollup -c -w",
     "check": "python3 tests/check.py"
   },
