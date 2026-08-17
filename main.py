@@ -1,10 +1,12 @@
 import asyncio
+import json
 import os
 import pwd
 import shutil
+
 import decky
 from settings import SettingsManager
-from list_parse import parse_list_line
+from item_parse import entries_from_items
 
 
 class Plugin:
@@ -14,10 +16,10 @@ class Plugin:
             settings_directory=decky.DECKY_PLUGIN_SETTINGS_DIR,
         )
         self.settings.read()
-        self._pinentry_ready = False
+        self._session: str | None = None
 
     async def _unload(self):
-        pass
+        self._session = None
 
     def _home(self) -> str:
         return decky.DECKY_USER_HOME
@@ -33,142 +35,184 @@ class Plugin:
         env = os.environ.copy()
         env["HOME"] = self._home()
         env["XDG_RUNTIME_DIR"] = self._runtime_dir()
+        if self._session:
+            env["BW_SESSION"] = self._session
         if extra:
             env.update(extra)
         return env
 
-    def _rbw_path(self) -> str:
-        configured = self.settings.getSetting("rbw_path", "")
+    def _bw_path(self) -> str:
+        configured = self.settings.getSetting("bw_path", "")
         if configured and os.path.isfile(configured) and os.access(configured, os.X_OK):
             return configured
         home = self._home()
         for candidate in (
-            os.path.join(home, ".local", "bin", "rbw"),
-            os.path.join(home, ".cargo", "bin", "rbw"),
-            "/usr/bin/rbw",
-            "/usr/local/bin/rbw",
+            os.path.join(home, ".local", "bin", "bw"),
+            os.path.join(home, "bin", "bw"),
+            "/usr/bin/bw",
+            "/usr/local/bin/bw",
         ):
             if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
                 return candidate
-        found = shutil.which("rbw")
+        found = shutil.which("bw")
         if found:
             return found
-        raise FileNotFoundError("rbw not found")
-
-    def _pinentry_path(self) -> str:
-        return os.path.join(decky.DECKY_PLUGIN_DIR, "bin", "pinentry-deckwarden")
+        raise FileNotFoundError("bw not found — install Bitwarden CLI")
 
     async def _run(
         self,
         args: list[str],
         *,
         extra_env: dict[str, str] | None = None,
-        input_text: str | None = None,
     ) -> tuple[int, str, str]:
         proc = await asyncio.create_subprocess_exec(
             *args,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
-            stdin=asyncio.subprocess.PIPE if input_text is not None else None,
             env=self._env(extra_env),
         )
-        stdout_b, stderr_b = await proc.communicate(
-            input_text.encode() if input_text is not None else None
-        )
+        stdout_b, stderr_b = await proc.communicate()
         return proc.returncode or 0, stdout_b.decode(), stderr_b.decode()
 
-    async def _ensure_pinentry(self) -> None:
-        if self._pinentry_ready:
-            return
-        shim = self._pinentry_path()
-        if not os.path.isfile(shim):
-            raise FileNotFoundError(f"pinentry shim missing: {shim}")
-        os.chmod(shim, 0o755)
-        rbw = self._rbw_path()
-        code, _, _ = await self._run([rbw, "config", "set", "pinentry", shim])
-        if code != 0:
-            raise RuntimeError("failed to set rbw pinentry")
-        self._pinentry_ready = True
+    async def _bw_status(self) -> dict:
+        bw = self._bw_path()
+        code, stdout, _ = await self._run([bw, "status", "--raw"])
+        if code != 0 or not stdout.strip():
+            return {"status": "unauthenticated", "userEmail": ""}
+        return json.loads(stdout)
 
-    async def unlocked(self) -> bool:
+    async def status(self) -> dict:
         try:
-            rbw = self._rbw_path()
-        except FileNotFoundError:
-            return False
-        code, _, _ = await self._run([rbw, "unlocked"])
-        return code == 0
+            raw = await self._bw_status()
+        except FileNotFoundError as e:
+            return {
+                "state": "missing",
+                "email": "",
+                "error": str(e),
+            }
+        email = raw.get("userEmail") or self.settings.getSetting("email", "")
+        st = raw.get("status", "unauthenticated")
+        if self._session and st == "unlocked":
+            state = "unlocked"
+        elif st == "unlocked" and not self._session:
+            state = "locked"
+        elif st == "locked":
+            state = "locked"
+        elif st == "unauthenticated":
+            state = "logged_out"
+        else:
+            state = "locked" if email else "logged_out"
+        if state != "unlocked":
+            self._session = None
+        return {"state": state, "email": email}
+
+    async def login(self, email: str, password: str) -> dict:
+        try:
+            bw = self._bw_path()
+        except FileNotFoundError as e:
+            return {"ok": False, "error": str(e)}
+        email = email.strip()
+        if not email or not password:
+            return {"ok": False, "error": "email and password required"}
+        self.settings.setSetting("email", email)
+        self.settings.commit()
+        try:
+            code, stdout, stderr = await self._run(
+                [bw, "login", email, "--passwordenv", "BW_PASSWORD", "--raw"],
+                extra_env={"BW_PASSWORD": password},
+            )
+            if code != 0:
+                err = (stderr or stdout).strip().splitlines()
+                msg = err[-1] if err else "login failed"
+                if "already logged in" in (stderr + stdout).lower():
+                    return await self.unlock(password)
+                return {"ok": False, "error": msg}
+            session = stdout.strip()
+            if not session:
+                return {"ok": False, "error": "no session from login"}
+            self._session = session
+            await self._run([bw, "sync"])
+            return {"ok": True}
+        finally:
+            del password
 
     async def unlock(self, password: str) -> dict:
         try:
-            rbw = self._rbw_path()
+            bw = self._bw_path()
         except FileNotFoundError as e:
             return {"ok": False, "error": str(e)}
+        if not password:
+            return {"ok": False, "error": "password required"}
         try:
-            await self._ensure_pinentry()
-        except Exception as e:
-            return {"ok": False, "error": str(e)}
-
-        runtime = self._runtime_dir()
-        pin_dir = os.path.join(runtime, "deckwarden")
-        pin_path = os.path.join(pin_dir, "pin")
-        os.makedirs(pin_dir, mode=0o700, exist_ok=True)
-        try:
-            fd = os.open(pin_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-            with os.fdopen(fd, "w") as f:
-                f.write(password)
-            await self._run([rbw, "stop-agent"])
-            code, _, _ = await self._run(
-                [rbw, "unlock"],
-                extra_env={"RBW_PIN": password},
+            raw = await self._bw_status()
+            if raw.get("status") == "unauthenticated":
+                email = self.settings.getSetting("email", "")
+                if not email:
+                    return {"ok": False, "error": "login first"}
+                return await self.login(email, password)
+            code, stdout, stderr = await self._run(
+                [bw, "unlock", "--passwordenv", "BW_PASSWORD", "--raw"],
+                extra_env={"BW_PASSWORD": password},
             )
             if code != 0:
-                return {"ok": False, "error": "unlock failed"}
+                err = (stderr or stdout).strip().splitlines()
+                return {"ok": False, "error": err[-1] if err else "unlock failed"}
+            session = stdout.strip()
+            if not session:
+                return {"ok": False, "error": "no session from unlock"}
+            self._session = session
             return {"ok": True}
         finally:
-            try:
-                os.unlink(pin_path)
-            except FileNotFoundError:
-                pass
             del password
 
     async def lock(self) -> dict:
-        rbw = self._rbw_path()
-        code, _, _ = await self._run([rbw, "lock"])
-        return {"ok": code == 0}
+        self._session = None
+        try:
+            bw = self._bw_path()
+            await self._run([bw, "lock"])
+        except FileNotFoundError:
+            pass
+        return {"ok": True}
+
+    async def logout(self) -> dict:
+        self._session = None
+        try:
+            bw = self._bw_path()
+            await self._run([bw, "logout"])
+        except FileNotFoundError:
+            pass
+        return {"ok": True}
 
     async def sync(self) -> dict:
-        rbw = self._rbw_path()
-        code, _, _ = await self._run([rbw, "sync"])
+        if not self._session:
+            return {"ok": False, "error": "locked"}
+        bw = self._bw_path()
+        code, _, _ = await self._run([bw, "sync"])
         return {"ok": code == 0, "error": "" if code == 0 else "sync failed"}
 
     async def list_entries(self) -> list[dict[str, str]]:
-        rbw = self._rbw_path()
-        code, stdout, _ = await self._run(
-            [rbw, "list", "--fields", "id,name,user"]
-        )
-        if code != 0:
+        if not self._session:
             return []
-        entries = []
-        for line in stdout.splitlines():
-            if not line.strip():
-                continue
-            parsed = parse_list_line(line)
-            if parsed:
-                entries.append(parsed)
-        return entries
+        bw = self._bw_path()
+        code, stdout, _ = await self._run([bw, "list", "items"])
+        if code != 0 or not stdout.strip():
+            return []
+        return entries_from_items(json.loads(stdout))
 
     async def get_password(self, entry_id: str) -> str:
-        rbw = self._rbw_path()
-        code, stdout, _ = await self._run([rbw, "get", "--", entry_id])
+        if not self._session:
+            return ""
+        bw = self._bw_path()
+        code, stdout, _ = await self._run([bw, "get", "password", entry_id])
         if code != 0:
             return ""
         return stdout.rstrip("\n")
 
     async def get_username(self, entry_id: str) -> str:
-        rbw = self._rbw_path()
-        code, stdout, _ = await self._run(
-            [rbw, "get", "--field", "user", "--", entry_id]
-        )
+        if not self._session:
+            return ""
+        bw = self._bw_path()
+        code, stdout, _ = await self._run([bw, "get", "username", entry_id])
         if code != 0:
             return ""
         return stdout.rstrip("\n")
@@ -177,7 +221,7 @@ class Plugin:
         return self.settings.getSetting(key, default)
 
     async def set_setting(self, key: str, value: str) -> None:
-        if key not in ("rbw_path", "last_query"):
+        if key not in ("bw_path", "last_query", "email"):
             return
         self.settings.setSetting(key, value)
         self.settings.commit()

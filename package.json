@@ -1,7 +1,7 @@
 {
   "name": "deckwarden",
   "version": "0.1.0",
-  "description": "Bitwarden vault access in Steam Deck Game Mode via rbw",
+  "description": "Bitwarden Cloud vault in Steam Deck Game Mode via official bw CLI",
   "type": "module",
   "scripts": {
     "build": "rollup -c",
@@ -17,7 +17,7 @@
     "plugin",
     "steam-deck",
     "bitwarden",
-    "rbw"
+    "bw"
   ],
   "author": "neronmoon",
   "license": "BSD-3-Clause",

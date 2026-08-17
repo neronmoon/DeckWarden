@@ -1,52 +1,38 @@
 # DeckWarden
 
-Bitwarden vault access in Steam Deck Game Mode via [`rbw`](https://github.com/doy/rbw) (unofficial Bitwarden CLI). Unlock → search → type username/password into the focused game/launcher.
+Bitwarden vault access in Steam Deck Game Mode via the official Bitwarden CLI (`bw`). Log in with Bitwarden Cloud email + master password → search → type credentials into the focused game/launcher.
+
+**Does not use `rbw`.**
 
 ## Requirements
 
 1. [Decky Loader](https://github.com/SteamDeckHomebrew/decky-loader)
-2. `rbw` installed and registered for the `deck` user
+2. Official Bitwarden CLI (`bw`) on the Deck for the `deck` user
 3. This plugin sideloaded into Decky
 
-## Install rbw (Desktop Mode)
+## Install Bitwarden CLI (Desktop Mode)
 
-Switch to Desktop Mode. Open a terminal as `deck`.
-
-### Binary via cargo
+Switch to Desktop Mode. As `deck`:
 
 ```bash
-# install Rust if needed: https://rustup.rs
-cargo install --locked rbw
 mkdir -p ~/.local/bin
-ln -sf ~/.cargo/bin/rbw ~/.local/bin/rbw
-ln -sf ~/.cargo/bin/rbw-agent ~/.local/bin/rbw-agent
+curl -L -o /tmp/bw.zip \
+  "https://vault.bitwarden.com/download/?app=cli&platform=linux"
+unzip -o /tmp/bw.zip -d /tmp/bw
+chmod +x /tmp/bw/bw
+mv /tmp/bw/bw ~/.local/bin/bw
+bw --version
 ```
 
-Or download a release binary into `~/.local/bin` and `chmod +x` it.
+Game Mode PATH is thin — keep the binary at `~/.local/bin/bw` (DeckWarden looks there first). Optional: set `bw_path` in plugin settings if installed elsewhere.
 
-Game Mode PATH is thin. Prefer `~/.local/bin/rbw` (DeckWarden looks there first). You can also set `rbw_path` in plugin settings later if needed.
-
-### Pinentry
-
-`rbw` normally uses a GUI/curses pinentry. Game Mode has no useful GUI pinentry. DeckWarden ships `bin/pinentry-deckwarden` and points `rbw` at it on first unlock. Do **not** use `pinentry-mac` or other GUI pinentries for Game Mode.
-
-Desktop Mode still works: when no unlock pin is supplied, the shim falls back to system `pinentry` / `pinentry-curses` / `pinentry-tty`.
-
-### Register / login / sync (once)
+Default server is Bitwarden Cloud. Self-hosted / Vaultwarden:
 
 ```bash
-rbw config set email your@email.com
-# Vaultwarden / self-hosted: also set base_url / identity_url as needed
-rbw register
-rbw login
-rbw sync
-rbw unlock   # verify Desktop unlock works
-rbw lock
+bw config server https://your-vault.example.com
 ```
 
-Complete any 2FA prompts here in Desktop Mode. DeckWarden only unlocks an already-registered vault.
-
-Optional: `rbw config set lock_timeout 3600` (seconds the agent keeps keys in memory).
+Accounts with interactive 2FA may need a one-time Desktop `bw login` first, or an API-key flow (not in this MVP).
 
 ## Install DeckWarden
 
@@ -60,53 +46,33 @@ pnpm run build
 ### Sideload
 
 1. Enable Decky Developer mode
-2. Copy the plugin folder to `~/homebrew/plugins/DeckWarden` on the Deck so it contains at least:
+2. Copy the plugin to `~/homebrew/plugins/DeckWarden` with at least:
 
-   - `plugin.json`
-   - `package.json`
-   - `main.py`
+   - `plugin.json`, `package.json`, `main.py`
    - `dist/index.js`
-   - `bin/pinentry-deckwarden` (from `defaults/bin` after install / or copy manually)
-   - `py_modules/`
+   - `py_modules/item_parse.py`
 
 3. Restart Decky / reload plugins
-
-Zip layout for distribution:
-
-```text
-DeckWarden/
-  dist/index.js
-  package.json
-  plugin.json
-  main.py
-  bin/pinentry-deckwarden
-  py_modules/list_parse.py
-  README.md
-  LICENSE
-```
-
-Decky copies `defaults/` into the plugin install dir; ensure `bin/pinentry-deckwarden` is executable.
 
 ## First run (Game Mode)
 
 1. Open Quick Access → DeckWarden
-2. Enter Bitwarden master password → Unlock
-3. Search entries (query is saved across reopen)
-4. Focus a game/launcher text field, open DeckWarden, select a row:
+2. Enter Bitwarden **email** + **master password** → Log in
+3. Later sessions: unlock with master password only (email remembered)
+4. Search entries (query persists across reopen)
+5. Focus a game/launcher field, open DeckWarden, select a row:
    - **A** — type password
    - **X** — type username
    - **Y** — reveal password (5s)
-5. Use Sync when the vault changed on another device; Lock when done
-
-`rbw-agent` keeps keys in memory until `lock_timeout` or Lock.
+6. Sync when the vault changed elsewhere; Lock when done
 
 ## Security
 
-- Master password is only held in memory / `$XDG_RUNTIME_DIR` for the unlock call, then deleted
-- Never written to plugin settings or logs
-- Credentials are fetched from `rbw` only when typing or revealing
-- No auto-unlock; no stored master password on disk
-- Session state lives in `rbw-agent`, not in this plugin
+- Master password only in memory for login/unlock (`BW_PASSWORD` env for that subprocess); never written to plugin settings or logs
+- Session key (`BW_SESSION`) kept in the plugin process memory only; cleared on Lock / unload
+- Email may be saved in plugin settings for convenience
+- Credentials fetched from `bw` only when typing or revealing
+- No auto-unlock
 
 ## Smoke check
 
@@ -114,18 +80,15 @@ Decky copies `defaults/` into the plugin install dir; ensure `bin/pinentry-deckw
 python3 tests/check.py
 ```
 
-Checks the Assuan pinentry shim and list-line parsing.
-
 ### Manual Game Mode checklist
 
-- [ ] Unlock with correct master password
+- [ ] Log in with email + master password
 - [ ] Wrong password shows an error
-- [ ] Search filters name/username; reopen keeps last query
-- [ ] A types password into focused field and closes QAM
-- [ ] X types username
+- [ ] Reopen → Unlock (email shown)
+- [ ] Search filters; query persists
+- [ ] A / X type into focused field and close QAM
 - [ ] Y reveals then auto-hides
-- [ ] Sync refreshes list
-- [ ] Lock returns to unlock screen
+- [ ] Sync / Lock / Log out work
 
 ## Development
 

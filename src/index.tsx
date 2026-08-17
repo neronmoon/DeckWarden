@@ -15,15 +15,86 @@ import {
   getUsername,
   listEntries,
   lock,
+  login,
+  logout,
   setSetting,
+  status,
   sync,
   unlock,
-  unlocked,
+  type Status,
   type VaultEntry,
 } from "./api";
 import { typeText } from "./typeText";
 
-function UnlockView({ onUnlocked }: { onUnlocked: () => void }) {
+function LoginView({
+  initialEmail,
+  onUnlocked,
+}: {
+  initialEmail: string;
+  onUnlocked: () => void;
+}) {
+  const [email, setEmail] = useState(initialEmail);
+  const [password, setPassword] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  const onLogin = async () => {
+    setBusy(true);
+    setError("");
+    const result = await login(email.trim(), password);
+    setPassword("");
+    setBusy(false);
+    if (!result.ok) {
+      setError(result.error || "Login failed");
+      return;
+    }
+    onUnlocked();
+  };
+
+  return (
+    <PanelSection title="Bitwarden Cloud">
+      <PanelSectionRow>
+        <TextField
+          label="Email"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+        />
+      </PanelSectionRow>
+      <PanelSectionRow>
+        <TextField
+          label="Master password"
+          bIsPassword
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+        />
+      </PanelSectionRow>
+      <PanelSectionRow>
+        <ButtonItem
+          layout="below"
+          disabled={busy || !email.trim() || !password}
+          onClick={onLogin}
+        >
+          {busy ? "Logging in…" : "Log in"}
+        </ButtonItem>
+      </PanelSectionRow>
+      {error ? (
+        <PanelSectionRow>
+          <div>{error}</div>
+        </PanelSectionRow>
+      ) : null}
+    </PanelSection>
+  );
+}
+
+function UnlockView({
+  email,
+  onUnlocked,
+  onLogout,
+}: {
+  email: string;
+  onUnlocked: () => void;
+  onLogout: () => void;
+}) {
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -43,6 +114,11 @@ function UnlockView({ onUnlocked }: { onUnlocked: () => void }) {
 
   return (
     <PanelSection title="Locked">
+      {email ? (
+        <PanelSectionRow>
+          <div style={{ opacity: 0.8 }}>{email}</div>
+        </PanelSectionRow>
+      ) : null}
       <PanelSectionRow>
         <TextField
           label="Master password"
@@ -54,6 +130,11 @@ function UnlockView({ onUnlocked }: { onUnlocked: () => void }) {
       <PanelSectionRow>
         <ButtonItem layout="below" disabled={busy || !password} onClick={onUnlock}>
           {busy ? "Unlocking…" : "Unlock"}
+        </ButtonItem>
+      </PanelSectionRow>
+      <PanelSectionRow>
+        <ButtonItem layout="below" disabled={busy} onClick={onLogout}>
+          Log out
         </ButtonItem>
       </PanelSectionRow>
       {error ? (
@@ -226,17 +307,17 @@ function SearchView({ onLocked }: { onLocked: () => void }) {
 }
 
 function Content() {
-  const [isUnlocked, setIsUnlocked] = useState<boolean | null>(null);
+  const [st, setSt] = useState<Status | null>(null);
 
   const refresh = useCallback(async () => {
-    setIsUnlocked(await unlocked());
+    setSt(await status());
   }, []);
 
   useEffect(() => {
     refresh();
   }, [refresh]);
 
-  if (isUnlocked === null) {
+  if (st === null) {
     return (
       <PanelSection title="DeckWarden">
         <PanelSectionRow>
@@ -246,11 +327,53 @@ function Content() {
     );
   }
 
-  if (!isUnlocked) {
-    return <UnlockView onUnlocked={() => setIsUnlocked(true)} />;
+  if (st.state === "missing") {
+    return (
+      <PanelSection title="Setup">
+        <PanelSectionRow>
+          <div>{st.error || "Bitwarden CLI (bw) not found"}</div>
+        </PanelSectionRow>
+        <PanelSectionRow>
+          <div>Install bw into ~/.local/bin, then reopen.</div>
+        </PanelSectionRow>
+        <PanelSectionRow>
+          <ButtonItem layout="below" onClick={refresh}>
+            Retry
+          </ButtonItem>
+        </PanelSectionRow>
+      </PanelSection>
+    );
   }
 
-  return <SearchView onLocked={() => setIsUnlocked(false)} />;
+  if (st.state === "unlocked") {
+    return (
+      <SearchView
+        onLocked={async () => {
+          setSt({ ...st, state: "locked" });
+        }}
+      />
+    );
+  }
+
+  if (st.state === "locked") {
+    return (
+      <UnlockView
+        email={st.email}
+        onUnlocked={() => setSt({ ...st, state: "unlocked" })}
+        onLogout={async () => {
+          await logout();
+          await refresh();
+        }}
+      />
+    );
+  }
+
+  return (
+    <LoginView
+      initialEmail={st.email}
+      onUnlocked={() => setSt({ ...st, state: "unlocked" })}
+    />
+  );
 }
 
 export default definePlugin(() => {

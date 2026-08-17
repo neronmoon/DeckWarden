@@ -5,7 +5,7 @@
   "api_version": 1,
   "publish": {
     "tags": ["utility", "password", "bitwarden"],
-    "description": "Bitwarden vault access in Game Mode via rbw.",
+    "description": "Bitwarden Cloud vault in Game Mode via official bw CLI.",
     "image": "https://opengraph.githubassets.com/1/neronmoon/DeckWarden"
   }
 }
